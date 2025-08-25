@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSuggestions } from "@/actions/search-simple";
+import { db } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   try {
@@ -10,7 +10,17 @@ export async function GET(request: NextRequest) {
       return NextResponse.json([]);
     }
 
-    const suggestions = await getSuggestions(query);
+    const suggestions = await db.product.findMany({
+      where: {
+        name: { contains: query, mode: "insensitive" },
+      },
+      select: {
+        id: true,
+        name: true,
+        sn: true,
+      },
+      take: 5,
+    });
 
     return NextResponse.json(suggestions);
   } catch (error) {

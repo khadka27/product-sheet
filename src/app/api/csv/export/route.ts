@@ -1,13 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
-import { searchProducts } from "@/actions/search-simple";
+import { db } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const query = searchParams.get("query") || undefined;
 
-    // Get products
-    const { items } = await searchProducts(query, 1, 10000); // Get all results for export
+    // Build where clause for simple text search
+    const where = query
+      ? {
+          OR: [
+            { name: { contains: query, mode: "insensitive" as const } },
+            { sn: { equals: parseInt(query) || undefined } },
+          ],
+        }
+      : {};
+
+    // Get all products for export
+    const items = await db.product.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+    });
 
     // Convert to CSV format
     const csvHeaders = ["sn", "name", "createdAt"];
