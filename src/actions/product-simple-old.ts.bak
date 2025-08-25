@@ -1,0 +1,180 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { db } from "@/lib/db";
+import { generateSlug, ensureUniqueSlug } from "@/lib/utils";
+import { ProductCreate } from "@/lib/validations";
+
+interface CreateProductResult {
+  success: boolean;
+  data?: { id: string };
+  error?: string;
+}
+
+export async function createProduct(
+  formData: FormData
+): Promise<CreateProductResult> {
+  try {
+    // Extract form data
+    const rawData = {
+      name: formData.get("name") as string,
+      description: formData.get("description") as string,
+      price: formData.get("price") as string,
+      currency: (formData.get("currency") as string) || "USD",
+      stock: formData.get("stock") as string,
+      category: formData.get("category") as string,
+      tags: formData.get("tags") as string,
+    };
+
+    // Parse and validate
+    const validated = ProductCreate.parse({
+      ...rawData,
+      price: parseFloat(rawData.price || "0"),
+      stock: parseInt(rawData.stock || "0"),
+      tags: rawData.tags
+        ? rawData.tags
+            .split(",")
+            .map((tag) => tag.trim())
+            .filter(Boolean)
+        : [],
+    });
+
+    // Generate slug
+    const baseSlug = generateSlug(validated.name);
+    const existingSlugs = await db.product
+      .findMany({
+        select: { slug: true },
+      })
+      .then((products: { slug: string }[]) =>
+        products.map((p: { slug: string }) => p.slug)
+      );
+    const slug = ensureUniqueSlug(baseSlug, existingSlugs);
+
+    // Handle category
+    let categoryId: string | undefined;
+    if (validated.category) {
+      const category = await db.category.upsert({
+        where: { name: validated.category },
+        update: {},
+        create: {
+          name: validated.category,
+          slug: generateSlug(validated.category),
+        },
+      });
+      categoryId = category.id;
+    }
+
+    // Handle tags
+    const tagIds: string[] = [];
+    if (validated.tags && validated.tags.length > 0) {
+      for (const tagName of validated.tags) {
+        const tag = await db.tag.upsert({
+          where: { name: tagName },
+          update: {},
+          create: {
+            name: tagName,
+            slug: generateSlug(tagName),
+          },
+        });
+        tagIds.push(tag.id);
+      }
+    }
+
+    // Create product
+    const product = await db.product.create({
+      data: {
+        name: validated.name,
+        slug,
+        description: validated.description,
+        price: validated.price,
+        currency: validated.currency,
+        stock: validated.stock,
+        categoryId,
+        tags: {
+          create: tagIds.map((tagId) => ({ tagId })),
+        },
+      },
+    });
+
+    revalidatePath("/");
+    return { success: true, data: { id: product.id } };
+  } catch (error) {
+    console.error("Error creating product:", error);
+    return {
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to create product",
+    };
+  }
+}
+
+export async function deleteProduct(
+  id: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    await db.product.delete({
+      where: { id },
+    });
+
+    revalidatePath("/");
+    return { success: true };
+  } catch (error) {
+    console.error("Error deleting product:", error);
+    return {
+      success: false,
+      error:
+        error instanceof Error ? error.message : "Failed to delete product",
+    };
+  }
+}
+
+// Simple bulk create function for CSV import
+export async function bulkCreateProducts(
+  products: {
+    name: string;
+    description?: string;
+    price?: number;
+    stock?: number;
+  }[]
+): Promise<{ success: boolean; count: number; error?: string }> {
+  try {
+    let count = 0;
+
+    for (const productData of products) {
+      const baseSlug = generateSlug(productData.name);
+      const existingSlugs = await db.product
+        .findMany({
+          select: { slug: true },
+        })
+        .then((products: { slug: string }[]) =>
+          products.map((p: { slug: string }) => p.slug)
+        );
+      const slug = ensureUniqueSlug(baseSlug, existingSlugs);
+
+      await db.product.create({
+        data: {
+          name: productData.name,
+          slug,
+          description:
+            productData.description ||
+            `${productData.name} - High quality product`,
+          price: productData.price || 0,
+          currency: "USD",
+          stock: productData.stock || 0,
+        },
+      });
+      count++;
+    }
+
+    revalidatePath("/");
+    return { success: true, count };
+  } catch (error) {
+    console.error("Error bulk creating products:", error);
+    return {
+      success: false,
+      count: 0,
+      error:
+        error instanceof Error ? error.message : "Failed to create products",
+    };
+  }
+}
