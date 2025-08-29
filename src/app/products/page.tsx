@@ -1,427 +1,604 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
-import { Button } from "@/components/ui/Button";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useToast } from "@/components/ui/Toast";
 
 interface Product {
   id: string;
   sn: number;
-  name: string;
-  createdAt: Date;
-  updatedAt: Date;
+  articleTitleName: string;
+  postedBy: string;
+  status: string;
+  contentDoc: string;
+  datePosted: string;
+  url: string;
+  websiteAffiliateLink: string;
+  referenceLink: string;
 }
 
-type Tab = "add" | "list";
+interface SearchFilters {
+  articleTitleName: string;
+  postedBy: string;
+  status: string;
+  contentDoc: string;
+  url: string;
+  websiteAffiliateLink: string;
+  referenceLink: string;
+}
 
-export default function ProductsPage() {
+const normalizeSearchText = (text: string): string => {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+};
+
+const calculateSimilarity = (str1: string, str2: string): number => {
+  const s1 = normalizeSearchText(str1);
+  const s2 = normalizeSearchText(str2);
+
+  if (s1 === s2) return 100;
+  if (s1.length === 0 || s2.length === 0) return 0;
+
+  if (s1.includes(s2) || s2.includes(s1)) return 90;
+
+  const matrix = Array(s2.length + 1)
+    .fill(null)
+    .map(() => Array(s1.length + 1).fill(null));
+
+  for (let i = 0; i <= s1.length; i++) matrix[0][i] = i;
+  for (let j = 0; j <= s2.length; j++) matrix[j][0] = j;
+
+  for (let j = 1; j <= s2.length; j++) {
+    for (let i = 1; i <= s1.length; i++) {
+      const indicator = s1[i - 1] === s2[j - 1] ? 0 : 1;
+      matrix[j][i] = Math.min(
+        matrix[j][i - 1] + 1,
+        matrix[j - 1][i] + 1,
+        matrix[j - 1][i - 1] + indicator
+      );
+    }
+  }
+
+  const distance = matrix[s2.length][s1.length];
+  const maxLength = Math.max(s1.length, s2.length);
+  return Math.round(((maxLength - distance) / maxLength) * 100);
+};
+
+const createSearchVariations = (searchTerm: string): string[] => {
+  const normalized = normalizeSearchText(searchTerm);
+  const original = searchTerm.toLowerCase().trim();
+  const withoutSpaces = original.replace(/\s+/g, "");
+  const withDashes = original.replace(/\s+/g, "-");
+  const withUnderscores = original.replace(/\s+/g, "_");
+  const words = original.split(/\s+/);
+
+  const variations = [
+    original,
+    normalized,
+    withoutSpaces,
+    withDashes,
+    withUnderscores,
+    ...words,
+  ];
+  return [...new Set(variations)];
+};
+
+const isProductMatch = (product: Product, filters: SearchFilters): boolean => {
+  if (filters.articleTitleName) {
+    const searchVariations = createSearchVariations(filters.articleTitleName);
+    const titleVariations = [
+      product.articleTitleName.toLowerCase(),
+      product.articleTitleName.toLowerCase().replace(/\s+/g, ""),
+      product.articleTitleName.toLowerCase().replace(/[-_\s]+/g, ""),
+      product.articleTitleName.toLowerCase().replace(/[-_]/g, " "),
+      product.articleTitleName.toLowerCase().replace(/\s+/g, "-"),
+      normalizeSearchText(product.articleTitleName),
+    ];
+
+    let maxSimilarity = 0;
+    for (const searchVar of searchVariations) {
+      for (const titleVar of titleVariations) {
+        const similarity = calculateSimilarity(titleVar, searchVar);
+        maxSimilarity = Math.max(maxSimilarity, similarity);
+      }
+    }
+
+    if (maxSimilarity < 50) return false;
+  }
+
+  if (filters.postedBy) {
+    const similarity = calculateSimilarity(product.postedBy, filters.postedBy);
+    if (similarity < 60) return false;
+  }
+
+  if (filters.status) {
+    const similarity = calculateSimilarity(product.status, filters.status);
+    if (similarity < 60) return false;
+  }
+
+  if (filters.contentDoc) {
+    const similarity = calculateSimilarity(
+      product.contentDoc,
+      filters.contentDoc
+    );
+    if (similarity < 60) return false;
+  }
+
+  if (filters.url) {
+    const similarity = calculateSimilarity(product.url, filters.url);
+    if (similarity < 60) return false;
+  }
+
+  if (filters.websiteAffiliateLink) {
+    const similarity = calculateSimilarity(
+      product.websiteAffiliateLink,
+      filters.websiteAffiliateLink
+    );
+    if (similarity < 60) return false;
+  }
+
+  if (filters.referenceLink) {
+    const similarity = calculateSimilarity(
+      product.referenceLink,
+      filters.referenceLink
+    );
+    if (similarity < 60) return false;
+  }
+
+  return true;
+};
+
+export default function ContentWorksheetPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
-  const [newProductNames, setNewProductNames] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [activeTab, setActiveTab] = useState<Tab>("add");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [globalSearch, setGlobalSearch] = useState("");
   const { addToast } = useToast();
 
-  // Real-time duplicate checking
-  const duplicateAnalysis = useMemo(() => {
-    if (!newProductNames.trim())
-      return { lines: [], duplicates: new Set(), uniqueNames: new Set() };
+  const [searchFilters, setSearchFilters] = useState<SearchFilters>({
+    articleTitleName: "",
+    postedBy: "",
+    status: "",
+    contentDoc: "",
+    url: "",
+    websiteAffiliateLink: "",
+    referenceLink: "",
+  });
 
-    const lines = newProductNames
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    const existingNames = new Set(products.map((p) => p.name.toLowerCase()));
-    const currentNames = new Map<string, number>();
-    const duplicates = new Set<string>();
-    const uniqueNames = new Set<string>();
+  const uniqueValues = useMemo(() => {
+    const values = {
+      postedBys: new Set<string>(),
+      statuses: new Set<string>(),
+      contentDocs: new Set<string>(),
+    };
 
-    // Check for duplicates within the input
-    lines.forEach((name) => {
-      const lowerName = name.toLowerCase();
-      const count = currentNames.get(lowerName) || 0;
-      currentNames.set(lowerName, count + 1);
+    products.forEach((product) => {
+      if (product.postedBy) values.postedBys.add(product.postedBy);
+      if (product.status) values.statuses.add(product.status);
+      if (product.contentDoc) values.contentDocs.add(product.contentDoc);
     });
 
-    lines.forEach((name) => {
-      const lowerName = name.toLowerCase();
-      const isDuplicateInInput = currentNames.get(lowerName)! > 1;
-      const existsInDatabase = existingNames.has(lowerName);
+    return {
+      postedBys: Array.from(values.postedBys).sort(),
+      statuses: Array.from(values.statuses).sort(),
+      contentDocs: Array.from(values.contentDocs).sort(),
+    };
+  }, [products]);
 
-      if (isDuplicateInInput || existsInDatabase) {
-        duplicates.add(name);
-      } else {
-        uniqueNames.add(name);
-      }
-    });
-
-    return { lines, duplicates, uniqueNames };
-  }, [newProductNames, products]);
-
-  // Filter products based on search
-  const filteredProducts = useMemo(() => {
-    if (!searchQuery.trim()) return products;
-
-    const query = searchQuery.toLowerCase();
-    return products.filter(
-      (product) =>
-        product.name.toLowerCase().includes(query) ||
-        product.sn.toString().includes(query)
-    );
-  }, [products, searchQuery]);
-
-  // Fetch all products
   const fetchProducts = useCallback(async () => {
     try {
       setLoading(true);
+      setError(null);
       const response = await fetch("/api/products");
-      if (response.ok) {
-        const data = await response.json();
-        setProducts(data);
-      } else {
-        addToast({ description: "Failed to fetch products", type: "error" });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP ${response.status}`);
       }
-    } catch (error) {
-      console.error("Error fetching products:", error);
-      addToast({ description: "Error fetching products", type: "error" });
+
+      const data = await response.json();
+      setProducts(data);
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to fetch content";
+      setError(errorMessage);
+      addToast({ title: `Error: ${errorMessage}`, type: "error" });
     } finally {
       setLoading(false);
     }
   }, [addToast]);
 
-  // Add multiple products
-  const addProducts = async () => {
-    if (!newProductNames.trim()) {
-      addToast({ description: "Please enter product names", type: "error" });
-      return;
-    }
+  const clearFilters = useCallback(() => {
+    setSearchFilters({
+      articleTitleName: "",
+      postedBy: "",
+      status: "",
+      contentDoc: "",
+      url: "",
+      websiteAffiliateLink: "",
+      referenceLink: "",
+    });
+    setGlobalSearch("");
+  }, []);
 
-    try {
-      setAdding(true);
+  // Update filter value
+  const updateFilter = useCallback(
+    (field: keyof SearchFilters, value: string) => {
+      setSearchFilters((prev) => ({ ...prev, [field]: value }));
+    },
+    []
+  );
 
-      // Split by newlines and filter out empty lines
-      const names = newProductNames
-        .split("\n")
-        .map((name) => name.trim())
-        .filter((name) => name.length > 0);
+  // Check if filters are active
+  const hasActiveFilters = Object.values(searchFilters).some((filter) =>
+    filter.trim()
+  );
 
-      if (names.length === 0) {
-        addToast({
-          description: "Please enter valid product names",
-          type: "error",
-        });
-        return;
-      }
+  // Global search across all fields with fuzzy matching
+  const globalSearchResults = useMemo(() => {
+    if (!globalSearch.trim()) return products;
 
-      const response = await fetch("/api/products/bulk", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ names }),
+    const searchTerm = globalSearch.toLowerCase();
+    return products.filter((product) => {
+      // Check each field for similarity
+      const fields = [
+        product.articleTitleName,
+        product.postedBy,
+        product.status,
+        product.contentDoc,
+        product.url,
+        product.websiteAffiliateLink,
+        product.referenceLink,
+        product.datePosted,
+      ];
+
+      return fields.some((field) => {
+        if (!field) return false;
+
+        // Exact match or substring match
+        if (field.toString().toLowerCase().includes(searchTerm)) return true;
+
+        // Fuzzy matching with 60% similarity threshold
+        const similarity = calculateSimilarity(field.toString(), searchTerm);
+        return similarity >= 60;
       });
+    });
+  }, [products, globalSearch]);
 
-      if (response.ok) {
-        const result = await response.json();
-        addToast({
-          description: `Added ${result.count} products successfully`,
-          type: "success",
-        });
-        setNewProductNames("");
-        fetchProducts(); // Refresh the list
-      } else {
-        const error = await response.json();
-        addToast({
-          description: error.message || "Failed to add products",
-          type: "error",
-        });
-      }
-    } catch (error) {
-      console.error("Error adding products:", error);
-      addToast({ description: "Error adding products", type: "error" });
-    } finally {
-      setAdding(false);
-    }
-  };
+  // Apply filters
+  const filteredProducts = useMemo(() => {
+    const baseProducts = globalSearch.trim() ? globalSearchResults : products;
 
-  // Delete product
-  const deleteProduct = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this product?")) {
-      return;
-    }
+    if (!hasActiveFilters) return baseProducts;
 
-    try {
-      const response = await fetch(`/api/products/${id}`, {
-        method: "DELETE",
-      });
+    return baseProducts.filter((product) =>
+      isProductMatch(product, searchFilters)
+    );
+  }, [
+    globalSearchResults,
+    products,
+    searchFilters,
+    hasActiveFilters,
+    globalSearch,
+  ]);
 
-      if (response.ok) {
-        addToast({
-          description: "Product deleted successfully",
-          type: "success",
-        });
-        fetchProducts(); // Refresh the list
-      } else {
-        addToast({ description: "Failed to delete product", type: "error" });
-      }
-    } catch (error) {
-      console.error("Error deleting product:", error);
-      addToast({ description: "Error deleting product", type: "error" });
-    }
-  };
-
+  // Fetch data on component mount
   useEffect(() => {
     fetchProducts();
   }, [fetchProducts]);
 
-  // Render individual lines with color coding
-  const renderProductLine = (line: string, index: number) => {
-    const isDuplicate = duplicateAnalysis.duplicates.has(line);
-    const isUnique = duplicateAnalysis.uniqueNames.has(line);
+  // Render cell content - Read Only View
+  const renderCellContent = (product: Product, field: keyof Product) => {
+    const value = product[field];
+
+    // Handle URL and link fields - make them clickable
+    if (
+      (field === "url" ||
+        field === "websiteAffiliateLink" ||
+        field === "referenceLink") &&
+      value &&
+      value.toString().trim()
+    ) {
+      const urlValue = value.toString();
+      const isValidUrl =
+        urlValue.startsWith("http://") || urlValue.startsWith("https://");
+      const linkUrl = isValidUrl ? urlValue : `https://${urlValue}`;
+
+      return (
+        <div className="flex items-center gap-2">
+          <a
+            href={linkUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:text-blue-300 underline break-all font-medium text-sm"
+          >
+            {urlValue}
+          </a>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              window.open(linkUrl, "_blank");
+            }}
+            className="text-xs bg-blue-800 hover:bg-blue-700 px-2 py-1 rounded text-blue-300"
+            title="Open in new tab"
+          >
+            ↗
+          </button>
+        </div>
+      );
+    }
 
     return (
-      <div
-        key={index}
-        className={`px-2 py-1 rounded text-sm ${
-          isDuplicate
-            ? "bg-red-100 text-red-800 border border-red-200"
-            : isUnique
-              ? "bg-green-100 text-green-800 border border-green-200"
-              : "bg-gray-100 text-gray-800"
-        }`}
-      >
-        {line}
-        {isDuplicate && (
-          <span className="ml-2 text-xs font-medium">(Duplicate)</span>
-        )}
-      </div>
+      <span className="break-all text-white font-medium">
+        {value ? value.toString() : ""}
+      </span>
     );
   };
 
-  return (
-    <div className="max-w-6xl mx-auto p-6">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          Product Management
-        </h1>
-        <p className="text-gray-600">
-          Manage your product inventory with auto-generated serial numbers
-        </p>
-      </div>
-
-      {/* Tab Navigation */}
-      <div className="mb-6">
-        <div className="border-b border-gray-200">
-          <nav className="-mb-px flex space-x-8">
-            <button
-              onClick={() => setActiveTab("add")}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                activeTab === "add"
-                  ? "border-blue-500 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              Add Products
-            </button>
-            <button
-              onClick={() => setActiveTab("list")}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                activeTab === "list"
-                  ? "border-blue-500 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-            >
-              Product List ({products.length})
-            </button>
-          </nav>
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-400 mx-auto mb-4"></div>
+          <p className="text-gray-300">Loading Content Worksheet...</p>
         </div>
       </div>
+    );
+  }
 
-      {/* Add Products Tab */}
-      {activeTab === "add" && (
-        <div className="bg-white rounded-lg border p-6">
-          <h2 className="text-xl font-semibold mb-4">Add New Products</h2>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Input Section */}
-            <div className="space-y-4">
-              <div>
-                <label
-                  htmlFor="product-names"
-                  className="block text-sm font-medium text-gray-700 mb-2"
-                >
-                  Product Names (one per line, or paste from Excel)
-                </label>
-                <textarea
-                  id="product-names"
-                  value={newProductNames}
-                  onChange={(e) => setNewProductNames(e.target.value)}
-                  placeholder="Enter product names, one per line:&#10;Product 1&#10;Product 2&#10;Product 3"
-                  className="w-full h-40 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
+  if (error) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="bg-red-900 border border-red-700 rounded-lg p-6 max-w-md">
+            <h2 className="text-lg font-semibold text-red-300 mb-2">
+              Error Loading Content
+            </h2>
+            <p className="text-red-400 mb-4">{error}</p>
+            <button
+              onClick={fetchProducts}
+              className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-              {/* Statistics */}
-              {newProductNames.trim() && (
-                <div className="text-sm space-y-2">
-                  <div className="flex items-center space-x-4">
-                    <span className="text-gray-600">
-                      Total: {duplicateAnalysis.lines.length}
-                    </span>
-                    <span className="text-green-600">
-                      Unique: {duplicateAnalysis.uniqueNames.size}
-                    </span>
-                    <span className="text-red-600">
-                      Duplicates: {duplicateAnalysis.duplicates.size}
-                    </span>
-                  </div>
-                </div>
-              )}
-
-              <Button
-                onClick={addProducts}
-                disabled={
-                  adding ||
-                  !newProductNames.trim() ||
-                  duplicateAnalysis.uniqueNames.size === 0
-                }
-                className="w-full"
-              >
-                {adding
-                  ? "Adding..."
-                  : `Add ${duplicateAnalysis.uniqueNames.size} Products`}
-              </Button>
+  return (
+    <div className="min-h-screen bg-gray-900">
+      {/* Sticky Header */}
+      <div className="sticky top-0 z-50 bg-gray-800 shadow-sm border-b border-gray-700">
+        <div className="max-w-full mx-auto px-4 py-4">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+              <h1 className="text-3xl font-bold text-white">
+                Content Worksheet
+              </h1>
+              <p className="text-sm text-gray-300 mt-1 font-medium">
+                {filteredProducts.length} of {products.length} articles
+                {hasActiveFilters && " (filtered)"}
+              </p>
             </div>
 
-            {/* Preview Section */}
-            <div>
-              <h3 className="text-sm font-medium text-gray-700 mb-2">
-                Real-time Preview
-              </h3>
-              <div className="border border-gray-300 rounded-md p-3 h-40 overflow-y-auto bg-gray-50">
-                {duplicateAnalysis.lines.length > 0 ? (
-                  <div className="space-y-1">
-                    {duplicateAnalysis.lines.map((line, index) =>
-                      renderProductLine(line, index)
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-gray-500 text-sm">
-                    Enter product names to see real-time duplicate checking...
-                  </p>
+            <div className="flex items-center gap-4">
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="Search all fields..."
+                  value={globalSearch}
+                  onChange={(e) => setGlobalSearch(e.target.value)}
+                  className="w-64 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+                {globalSearch && (
+                  <button
+                    onClick={() => setGlobalSearch("")}
+                    className="absolute right-2 top-2 text-gray-400 hover:text-gray-200"
+                  >
+                    ✕
+                  </button>
                 )}
               </div>
 
-              {/* Legend */}
-              <div className="mt-3 text-xs space-y-1">
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-green-100 border border-green-200 rounded"></div>
-                  <span className="text-gray-600">Unique (will be added)</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-red-100 border border-red-200 rounded"></div>
-                  <span className="text-gray-600">
-                    Duplicate (will be skipped)
-                  </span>
-                </div>
-              </div>
+              <button
+                onClick={fetchProducts}
+                disabled={loading}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {loading ? "Loading..." : "Refresh"}
+              </button>
             </div>
           </div>
         </div>
-      )}
+      </div>
 
-      {/* Product List Tab */}
-      {activeTab === "list" && (
-        <div className="bg-white rounded-lg border overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
-              <h2 className="text-xl font-semibold">
-                Product List ({filteredProducts.length} of {products.length}{" "}
-                items)
-              </h2>
+      {/* Sticky Filters */}
+      <div className="sticky top-24 z-40 bg-gray-800 border-b border-gray-700">
+        <div className="max-w-full mx-auto px-4 py-4">
+          <div className="flex flex-wrap gap-4 items-center">
+            <h3 className="font-medium text-gray-300 flex-shrink-0">
+              Filters:
+            </h3>
 
-              {/* Search Input */}
-              <div className="w-full sm:w-64">
-                <input
-                  type="text"
-                  placeholder="Search products..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-              </div>
-            </div>
+            {/* Article Title Filter */}
+            <input
+              type="text"
+              placeholder="Article Title..."
+              value={searchFilters.articleTitleName}
+              onChange={(e) => updateFilter("articleTitleName", e.target.value)}
+              className="px-3 py-1 bg-gray-700 border border-gray-600 text-white placeholder-gray-400 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+
+            {/* Posted By Filter */}
+            <select
+              value={searchFilters.postedBy}
+              onChange={(e) => updateFilter("postedBy", e.target.value)}
+              className="px-3 py-1 bg-gray-700 border border-gray-600 text-white rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="">All Posted By</option>
+              {uniqueValues.postedBys.map((postedBy) => (
+                <option key={postedBy} value={postedBy}>
+                  {postedBy}
+                </option>
+              ))}
+            </select>
+
+            {/* Status Filter */}
+            <select
+              value={searchFilters.status}
+              onChange={(e) => updateFilter("status", e.target.value)}
+              className="px-3 py-1 bg-gray-700 border border-gray-600 text-white rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="">All Status</option>
+              {uniqueValues.statuses.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+
+            {/* Content Doc Filter */}
+            <select
+              value={searchFilters.contentDoc}
+              onChange={(e) => updateFilter("contentDoc", e.target.value)}
+              className="px-3 py-1 bg-gray-700 border border-gray-600 text-white rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="">All Content Doc</option>
+              {uniqueValues.contentDocs.map((contentDoc) => (
+                <option key={contentDoc} value={contentDoc}>
+                  {contentDoc}
+                </option>
+              ))}
+            </select>
+
+            {/* URL Filter */}
+            <input
+              type="text"
+              placeholder="URL..."
+              value={searchFilters.url}
+              onChange={(e) => updateFilter("url", e.target.value)}
+              className="px-3 py-1 bg-gray-700 border border-gray-600 text-white placeholder-gray-400 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            />
+
+            {/* Clear Filters */}
+            {hasActiveFilters && (
+              <button
+                onClick={clearFilters}
+                className="px-3 py-1 bg-gray-600 text-gray-300 rounded text-sm hover:bg-gray-500"
+              >
+                Clear Filters
+              </button>
+            )}
           </div>
+        </div>
+      </div>
 
-          {loading ? (
-            <div className="p-8 text-center">
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-              <p className="mt-2 text-gray-600">Loading products...</p>
-            </div>
-          ) : filteredProducts.length === 0 ? (
-            <div className="p-8 text-center text-gray-500">
-              {searchQuery
-                ? "No products found matching your search."
-                : "No products found. Add some products using the Add Products tab."}
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      SN
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Product Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Created
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {filteredProducts.map((product) => (
-                    <tr key={product.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+      {/* Main Content Table - Read Only View */}
+      <div className="max-w-full mx-auto px-4 py-6 pt-4">
+        <div className="bg-gray-800 rounded-lg shadow-sm border border-gray-700 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead>
+                <tr className="bg-gray-700 border-b border-gray-600">
+                  <th className="text-left p-3 font-bold text-white border-r border-gray-600 min-w-[60px]">
+                    S.N.
+                  </th>
+                  <th className="text-left p-3 font-bold text-white border-r border-gray-600 min-w-[250px]">
+                    Article Title Name
+                  </th>
+                  <th className="text-left p-3 font-bold text-white border-r border-gray-600 min-w-[120px]">
+                    Posted By
+                  </th>
+                  <th className="text-left p-3 font-bold text-white border-r border-gray-600 min-w-[100px]">
+                    Status
+                  </th>
+                  <th className="text-left p-3 font-bold text-white border-r border-gray-600 min-w-[120px]">
+                    Content Doc
+                  </th>
+                  <th className="text-left p-3 font-bold text-white border-r border-gray-600 min-w-[100px]">
+                    Date Posted
+                  </th>
+                  <th className="text-left p-3 font-bold text-white border-r border-gray-600 min-w-[200px]">
+                    URL
+                  </th>
+                  <th className="text-left p-3 font-bold text-white border-r border-gray-600 min-w-[200px]">
+                    Website Affiliate Link
+                  </th>
+                  <th className="text-left p-3 font-bold text-white min-w-[200px]">
+                    Reference Link
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {/* Data Rows - Read Only View */}
+                {filteredProducts.map((product, index) => {
+                  const isDuplicate =
+                    products.filter(
+                      (p) =>
+                        p.articleTitleName.toLowerCase() ===
+                        product.articleTitleName.toLowerCase()
+                    ).length > 1;
+
+                  return (
+                    <tr
+                      key={product.id}
+                      className={`border-b border-gray-600 hover:bg-blue-900 transition-colors ${
+                        isDuplicate
+                          ? "bg-yellow-900"
+                          : index % 2 === 0
+                            ? "bg-gray-800"
+                            : "bg-gray-700"
+                      }`}
+                    >
+                      <td className="p-3 border-r border-gray-600 font-bold text-white">
                         {product.sn}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        <span
-                          className={
-                            searchQuery &&
-                            product.name
-                              .toLowerCase()
-                              .includes(searchQuery.toLowerCase())
-                              ? "bg-yellow-200"
-                              : ""
-                          }
-                        >
-                          {product.name}
-                        </span>
+                      <td className="p-3 border-r border-gray-600 text-white font-medium">
+                        {renderCellContent(product, "articleTitleName")}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {new Date(product.createdAt).toLocaleDateString()}
+                      <td className="p-3 border-r border-gray-600 text-gray-300">
+                        {renderCellContent(product, "postedBy")}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <button
-                          onClick={() => deleteProduct(product.id)}
-                          className="text-red-600 hover:text-red-900"
-                        >
-                          Delete
-                        </button>
+                      <td className="p-3 border-r border-gray-600 text-gray-300">
+                        {renderCellContent(product, "status")}
+                      </td>
+                      <td className="p-3 border-r border-gray-600 text-gray-300">
+                        {renderCellContent(product, "contentDoc")}
+                      </td>
+                      <td className="p-3 border-r border-gray-600 text-gray-300">
+                        {renderCellContent(product, "datePosted")}
+                      </td>
+                      <td className="p-3 border-r border-gray-600">
+                        {renderCellContent(product, "url")}
+                      </td>
+                      <td className="p-3 border-r border-gray-600">
+                        {renderCellContent(product, "websiteAffiliateLink")}
+                      </td>
+                      <td className="p-3">
+                        {renderCellContent(product, "referenceLink")}
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  );
+                })}
+
+                {/* Empty state */}
+                {filteredProducts.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="p-8 text-center text-gray-400">
+                      {hasActiveFilters || globalSearch.trim()
+                        ? "No content matches your search criteria"
+                        : "No content available"}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

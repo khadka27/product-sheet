@@ -2,27 +2,11 @@ import { NextResponse } from "next/server";
 import { google } from "googleapis";
 
 // Google Sheets configuration
-const SPREADSHEET_ID = "1wdRRBL9XTCxI7RGj7NdRG8nukdSnpjx5wk3IiTXBAas"; // From the provided URL
-const SHEET_GID = "1231362096"; // Specific sheet tab ID for Content Worksheet
-
-interface Product {
-  id: string;
-  sn: number;
-  articleTitleName: string;
-  postedBy: string;
-  status: string;
-  contentDoc: string;
-  datePosted: string;
-  url: string;
-  websiteAffiliateLink: string;
-  referenceLink: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
+const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID!;
 
 // Simple in-memory cache to reduce API calls
 const cache = {
-  data: null as Product[] | null,
+  data: null as any[] | null,
   lastFetch: 0,
   ttl: 30000, // 30 seconds cache
 };
@@ -30,6 +14,31 @@ const cache = {
 // Rate limiting
 let lastRequestTime = 0;
 const MIN_REQUEST_INTERVAL = 2000; // 2 seconds between requests
+
+// Column mapping based on your database structure
+const COLUMN_HEADERS = [
+  "SN",
+  "Product Name",
+  "Product Research By",
+  "Status",
+  "Article Assigned to",
+  "Trends",
+  "Duplicate",
+  "Approval Status",
+  "Offer In Which Affiliate",
+  "Petty Link Status",
+  "Affiliate Link",
+  "Affiliate Person Name",
+  "Website Tracking Link",
+  "Petty Links",
+  "Reference Link",
+  "Article By",
+  "Category",
+  "Date Added on",
+  "Country",
+  "Commission",
+  "VSL",
+];
 
 // Initialize Google Sheets client
 async function getSheetsClient() {
@@ -57,112 +66,60 @@ async function getSheetsClient() {
   }
 }
 
-// Dynamically determine the range based on sheet data
-async function getDynamicRange(
-  sheets: ReturnType<typeof google.sheets>
-): Promise<string> {
-  try {
-    // Get the specific sheet by GID
-    const sheetInfo = await sheets.spreadsheets.get({
-      spreadsheetId: SPREADSHEET_ID,
-    });
-
-    // Find the sheet with the specific GID
-    const targetSheet = sheetInfo.data.sheets?.find(
-      (sheet) => sheet.properties?.sheetId?.toString() === SHEET_GID
-    );
-
-    if (!targetSheet) {
-      throw new Error(`Sheet with GID ${SHEET_GID} not found`);
-    }
-
-    const properties = targetSheet.properties;
-    const sheetName = properties?.title || "Content Worksheet";
-
-    // Get the grid properties to determine max columns and rows
-    const maxRows = properties?.gridProperties?.rowCount || 1000;
-    const maxCols = properties?.gridProperties?.columnCount || 26;
-
-    // Convert column count to letter (A, B, C... Z, AA, AB...)
-    function numberToColumnLetter(num: number): string {
-      let result = "";
-      while (num > 0) {
-        num--;
-        result = String.fromCharCode(65 + (num % 26)) + result;
-        num = Math.floor(num / 26);
-      }
-      return result;
-    }
-
-    // For Content Worksheet, we expect 10 columns (A to J): S.N., Article Title Name, Posted By, Status, Content Doc, Date Posted, URL, Website Affiliate Link, Reference Link
-    const endColumn = numberToColumnLetter(Math.min(10, maxCols));
-
-    // Try to detect actual data range by checking for non-empty cells
-    const sampleResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `'${sheetName}'!A1:${endColumn}${Math.min(1000, maxRows)}`, // Use sheet name with GID
-    });
-
-    const sampleRows = sampleResponse.data.values || [];
-
-    // Find the last row with data
-    let lastRowWithData = 1; // At least header row
-    for (let i = sampleRows.length - 1; i >= 0; i--) {
-      const row = sampleRows[i];
-      if (
-        row?.some(
-          (cell: string | number) => cell && cell.toString().trim() !== ""
-        )
-      ) {
-        lastRowWithData = i + 1; // +1 because array is 0-indexed but sheets are 1-indexed
-        break;
-      }
-    }
-
-    // Return dynamic range with some extra rows for new entries
-    const dynamicRange = `'${sheetName}'!A1:${endColumn}${Math.max(lastRowWithData + 50, 100)}`; // Add 50 extra rows or minimum 100 rows
-    console.log(`Dynamic range determined: ${dynamicRange}`);
-    return dynamicRange;
-  } catch (error) {
-    console.warn(
-      "Failed to determine dynamic range, falling back to default:",
-      error
-    );
-    // Fallback to static range if dynamic detection fails
-    return "'Content Worksheet'!A1:J1000";
-  }
-}
-
 // Convert row data to Product object
-function rowToProduct(row: string[], index: number): Product {
+function rowToProduct(row: string[], index: number) {
   return {
-    id: `content_${index}`,
+    id: `product_${index}`,
     sn: parseInt(row[0]) || index + 1,
-    articleTitleName: row[1] || "",
-    postedBy: row[2] || "",
+    productName: row[1] || "",
+    productResearchBy: row[2] || "",
     status: row[3] || "",
-    contentDoc: row[4] || "",
-    datePosted: row[5] || "",
-    url: row[6] || "",
-    websiteAffiliateLink: row[7] || "",
-    referenceLink: row[8] || "",
+    articleAssignedTo: row[4] || "",
+    trends: row[5] || "",
+    duplicate: row[6] || "",
+    approvalStatus: row[7] || "",
+    offerInWhichAffiliate: row[8] || "",
+    pettyLinkStatus: row[9] || "",
+    affiliateLink: row[10] || "",
+    affiliatePersonName: row[11] || "",
+    websiteTrackingLink: row[12] || "",
+    pettyLinks: row[13] || "",
+    referenceLink: row[14] || "",
+    articleBy: row[15] || "",
+    category: row[16] || "",
+    dateAddedOn: row[17] || "",
+    country: row[18] || "",
+    commission: row[19] || "",
+    vsl: row[20] || "",
     createdAt: new Date(),
     updatedAt: new Date(),
   };
 }
 
 // Convert Product object to row data
-function productToRow(product: Product): string[] {
+function productToRow(product: any): string[] {
   return [
     product.sn?.toString() || "",
-    product.articleTitleName || "",
-    product.postedBy || "",
+    product.productName || "",
+    product.productResearchBy || "",
     product.status || "",
-    product.contentDoc || "",
-    product.datePosted || new Date().toLocaleDateString(),
-    product.url || "",
-    product.websiteAffiliateLink || "",
+    product.articleAssignedTo || "",
+    product.trends || "",
+    product.duplicate || "",
+    product.approvalStatus || "",
+    product.offerInWhichAffiliate || "",
+    product.pettyLinkStatus || "",
+    product.affiliateLink || "",
+    product.affiliatePersonName || "",
+    product.websiteTrackingLink || "",
+    product.pettyLinks || "",
     product.referenceLink || "",
+    product.articleBy || "",
+    product.category || "",
+    product.dateAddedOn || new Date().toLocaleDateString(),
+    product.country || "",
+    product.commission || "",
+    product.vsl || "",
   ];
 }
 
@@ -204,12 +161,9 @@ export async function GET() {
     console.log("Fetching fresh data from Google Sheets");
     const sheets = await getSheetsClient();
 
-    // Get dynamic range
-    const dynamicRange = await getDynamicRange(sheets);
-
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: dynamicRange,
+      range: `A:U`, // All columns A through U (21 columns)
     });
 
     const rows = response.data.values || [];
@@ -224,12 +178,11 @@ export async function GET() {
     cache.lastFetch = Date.now();
 
     return NextResponse.json(products);
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error fetching products:", error);
-    const err = error as Error & { code?: number };
 
     // Handle quota exceeded error specifically
-    if (err.code === 429 || err.message?.includes("Quota exceeded")) {
+    if (error.code === 429 || error.message?.includes("Quota exceeded")) {
       return NextResponse.json(
         {
           error:
@@ -247,7 +200,7 @@ export async function GET() {
     }
 
     return NextResponse.json(
-      { error: "Failed to fetch products", details: err.message || err },
+      { error: "Failed to fetch products", details: error.message || error },
       { status: 500 }
     );
   }
@@ -270,12 +223,10 @@ export async function POST(request: Request) {
     const product = await request.json();
     const sheets = await getSheetsClient();
 
-    // Get dynamic range to determine next row
-    const dynamicRange = await getDynamicRange(sheets);
-
+    // Get current data to determine next row
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: dynamicRange,
+      range: `A:U`,
     });
 
     const rows = response.data.values || [];
@@ -298,11 +249,10 @@ export async function POST(request: Request) {
     cache.data = null;
 
     return NextResponse.json({ success: true, product });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error adding product:", error);
-    const err = error as Error & { code?: number };
 
-    if (err.code === 429 || err.message?.includes("Quota exceeded")) {
+    if (error.code === 429 || error.message?.includes("Quota exceeded")) {
       return NextResponse.json(
         {
           error:
@@ -314,7 +264,7 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(
-      { error: "Failed to add product", details: err.message || err },
+      { error: "Failed to add product", details: error.message || error },
       { status: 500 }
     );
   }
@@ -337,12 +287,10 @@ export async function PUT(request: Request) {
     const product = await request.json();
     const sheets = await getSheetsClient();
 
-    // Get dynamic range to find the row to update
-    const dynamicRange = await getDynamicRange(sheets);
-
+    // Get current data to find the row to update
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: dynamicRange,
+      range: `A:U`,
     });
 
     const rows = response.data.values || [];
@@ -360,13 +308,10 @@ export async function PUT(request: Request) {
     const rowData = productToRow(product);
     const sheetRowNumber = rowIndex + 1; // +1 because sheets are 1-indexed
 
-    // Determine the end column for Content Worksheet (9 columns A-I)
-    const endColumn = String.fromCharCode(65 + rowData.length - 1); // A=65, so A+8=I for 9 columns
-
     // Update the row
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: `A${sheetRowNumber}:${endColumn}${sheetRowNumber}`,
+      range: `A${sheetRowNumber}:U${sheetRowNumber}`,
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [rowData],
@@ -377,11 +322,10 @@ export async function PUT(request: Request) {
     cache.data = null;
 
     return NextResponse.json({ success: true, product });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error updating product:", error);
-    const err = error as Error & { code?: number };
 
-    if (err.code === 429 || err.message?.includes("Quota exceeded")) {
+    if (error.code === 429 || error.message?.includes("Quota exceeded")) {
       return NextResponse.json(
         {
           error:
@@ -393,7 +337,7 @@ export async function PUT(request: Request) {
     }
 
     return NextResponse.json(
-      { error: "Failed to update product", details: err.message || err },
+      { error: "Failed to update product", details: error.message || error },
       { status: 500 }
     );
   }

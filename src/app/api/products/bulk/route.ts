@@ -1,47 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/lib/db";
 
+// Redirect to main products route for bulk operations
 export async function POST(request: NextRequest) {
   try {
-    const { names } = await request.json();
-
-    if (!Array.isArray(names) || names.length === 0) {
-      return NextResponse.json(
-        { error: "Names array is required" },
-        { status: 400 }
-      );
-    }
-
-    // Filter out empty names
-    const validNames = names
-      .map((name) => (typeof name === "string" ? name.trim() : ""))
-      .filter((name) => name.length > 0);
-
-    if (validNames.length === 0) {
-      return NextResponse.json(
-        { error: "No valid product names provided" },
-        { status: 400 }
-      );
-    }
-
-    // Create products
-    const createPromises = validNames.map((name) =>
-      db.product.create({
-        data: { name },
-      })
-    );
-
-    const createdProducts = await Promise.all(createPromises);
-
-    return NextResponse.json({
-      message: "Products created successfully",
-      count: createdProducts.length,
-      products: createdProducts,
+    const body = await request.json();
+    
+    // Forward to main products route
+    const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/products`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
     });
-  } catch (error) {
-    console.error("Error creating products:", error);
+
+    const data = await response.json();
+    
+    return NextResponse.json(data, { status: response.status });
+  } catch (error: unknown) {
+    console.error("Error in bulk route:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(
-      { error: "Failed to create products" },
+      { error: errorMessage },
       { status: 500 }
     );
   }
