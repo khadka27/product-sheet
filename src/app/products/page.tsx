@@ -186,11 +186,30 @@ export default function ContentWorksheetPage() {
     };
   }, [products]);
 
-  const fetchProducts = useCallback(async () => {
+  const fetchProducts = useCallback(async (retryCount = 0) => {
     try {
       setLoading(true);
       setError(null);
       const response = await fetch("/api/products");
+
+      if (response.status === 429) {
+        // Handle rate limiting with exponential backoff
+        if (retryCount < 3) {
+          const waitTime = Math.pow(2, retryCount) * 2000; // 2s, 4s, 8s
+          console.log(`Rate limited, retrying in ${waitTime}ms...`);
+          addToast({ 
+            title: `Rate limited. Retrying in ${waitTime/1000} seconds...`, 
+            type: "warning" 
+          });
+          
+          setTimeout(() => {
+            fetchProducts(retryCount + 1);
+          }, waitTime);
+          return;
+        } else {
+          throw new Error("Too many requests. Please wait and refresh the page.");
+        }
+      }
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -199,6 +218,10 @@ export default function ContentWorksheetPage() {
 
       const data = await response.json();
       setProducts(data);
+      
+      if (retryCount > 0) {
+        addToast({ title: "Data loaded successfully", type: "success" });
+      }
     } catch (err) {
       const errorMessage =
         err instanceof Error ? err.message : "Failed to fetch content";

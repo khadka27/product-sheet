@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { google } from "googleapis";
 
 // Google Sheets configuration
-const SPREADSHEET_ID = "1wdRRBL9XTCxI7RGj7NdRG8nukdSnpjx5wk3IiTXBAas"; // From the provided URL
+// Use environment variable for spreadsheet ID
+const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID || "1wdRRBL9XTCxI7RGj7NdRG8nukdSnpjx5wk3IiTXBAas";
 const SHEET_GID = "1231362096"; // Specific sheet tab ID for Content Worksheet
 
 interface Product {
@@ -24,27 +25,41 @@ interface Product {
 const cache = {
   data: null as Product[] | null,
   lastFetch: 0,
-  ttl: 30000, // 30 seconds cache
+  // Longer cache in production to reduce API calls
+  ttl: process.env.NODE_ENV === 'production' ? 60000 : 30000, // 1 minute in production, 30 seconds in development
 };
 
-// Rate limiting
+// Rate limiting with different intervals for development vs production
 let lastRequestTime = 0;
-const MIN_REQUEST_INTERVAL = 2000; // 2 seconds between requests
+const MIN_REQUEST_INTERVAL = process.env.NODE_ENV === 'production' ? 5000 : 2000; // 5 seconds in production, 2 seconds in development
 
 // Initialize Google Sheets client
 async function getSheetsClient() {
   try {
-    if (!process.env.GOOGLE_CLIENT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
-      throw new Error("Missing Google service account credentials");
+    // Enhanced environment variable validation
+    const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
+    const privateKey = process.env.GOOGLE_PRIVATE_KEY;
+    const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+
+    if (!clientEmail) {
+      throw new Error("GOOGLE_CLIENT_EMAIL environment variable is missing");
+    }
+    
+    if (!privateKey) {
+      throw new Error("GOOGLE_PRIVATE_KEY environment variable is missing");
+    }
+
+    if (!spreadsheetId) {
+      throw new Error("GOOGLE_SHEET_ID environment variable is missing");
     }
 
     // Handle the private key formatting
-    const privateKey = process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n");
+    const formattedPrivateKey = privateKey.replace(/\\n/g, "\n");
 
     const auth = new google.auth.GoogleAuth({
       credentials: {
-        client_email: process.env.GOOGLE_CLIENT_EMAIL,
-        private_key: privateKey,
+        client_email: clientEmail,
+        private_key: formattedPrivateKey,
       },
       scopes: ["https://www.googleapis.com/auth/spreadsheets"],
     });
@@ -228,26 +243,55 @@ export async function GET() {
     console.error("Error fetching products:", error);
     const err = error as Error & { code?: number };
 
-    // Handle quota exceeded error specifically
-    if (err.code === 429 || err.message?.includes("Quota exceeded")) {
+    // Enhanced error handling for deployment
+    if (err.message?.includes("GOOGLE_CLIENT_EMAIL") || err.message?.includes("GOOGLE_PRIVATE_KEY")) {
+      console.error("Missing environment variables for Google Sheets API");
       return NextResponse.json(
         {
-          error:
-            "Google Sheets API quota exceeded. Please wait a few minutes and try again.",
-          retryAfter: 60, // Suggest waiting 60 seconds
+          error: "Server configuration error. Please check environment variables.",
+          details: process.env.NODE_ENV === 'development' ? err.message : "Configuration missing"
+        },
+        { status: 500 }
+      );
+    }
+
+    // Handle quota exceeded error specifically
+    if (err.code === 429 || err.message?.includes("Quota exceeded") || err.message?.includes("quotaExceeded")) {
+      console.warn("Google Sheets API quota exceeded");
+      return NextResponse.json(
+        {
+          error: "Google Sheets API quota exceeded. Please wait a few minutes and try again.",
+          retryAfter: 60,
         },
         { status: 429 }
       );
     }
 
+    // Handle authentication errors
+    if (err.message?.includes("authentication") || err.message?.includes("unauthorized") || err.code === 401) {
+      console.error("Authentication failed with Google Sheets API");
+      return NextResponse.json(
+        {
+          error: "Authentication failed. Please check API credentials.",
+          details: process.env.NODE_ENV === 'development' ? err.message : "Authentication error"
+        },
+        { status: 401 }
+      );
+    }
+
     // If we have cached data and there's an error, return cached data
     if (cache.data !== null) {
-      console.log("API error, returning cached data");
+      console.log("API error, returning cached data. Error:", err.message);
       return NextResponse.json(cache.data);
     }
 
+    // Generic error response
+    console.error("Unhandled error in products API:", err);
     return NextResponse.json(
-      { error: "Failed to fetch products", details: err.message || err },
+      { 
+        error: "Failed to fetch products", 
+        details: process.env.NODE_ENV === 'development' ? err.message || err : "Internal server error"
+      },
       { status: 500 }
     );
   }
