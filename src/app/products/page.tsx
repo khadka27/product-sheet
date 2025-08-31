@@ -186,51 +186,56 @@ export default function ContentWorksheetPage() {
     };
   }, [products]);
 
-  const fetchProducts = useCallback(async (retryCount = 0) => {
-    try {
-      setLoading(true);
-      setError(null);
-      const response = await fetch("/api/products");
+  const fetchProducts = useCallback(
+    async (retryCount = 0) => {
+      try {
+        setLoading(true);
+        setError(null);
+        const response = await fetch("/api/products");
 
-      if (response.status === 429) {
-        // Handle rate limiting with exponential backoff
-        if (retryCount < 3) {
-          const waitTime = Math.pow(2, retryCount) * 2000; // 2s, 4s, 8s
-          console.log(`Rate limited, retrying in ${waitTime}ms...`);
-          addToast({ 
-            title: `Rate limited. Retrying in ${waitTime/1000} seconds...`, 
-            type: "warning" 
-          });
-          
-          setTimeout(() => {
-            fetchProducts(retryCount + 1);
-          }, waitTime);
-          return;
-        } else {
-          throw new Error("Too many requests. Please wait and refresh the page.");
+        if (response.status === 429) {
+          // Handle rate limiting with exponential backoff
+          if (retryCount < 3) {
+            const waitTime = Math.pow(2, retryCount) * 2000; // 2s, 4s, 8s
+            console.log(`Rate limited, retrying in ${waitTime}ms...`);
+            addToast({
+              title: `Rate limited. Retrying in ${waitTime / 1000} seconds...`,
+              type: "warning",
+            });
+
+            setTimeout(() => {
+              fetchProducts(retryCount + 1);
+            }, waitTime);
+            return;
+          } else {
+            throw new Error(
+              "Too many requests. Please wait and refresh the page."
+            );
+          }
         }
-      }
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `HTTP ${response.status}`);
-      }
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
 
-      const data = await response.json();
-      setProducts(data);
-      
-      if (retryCount > 0) {
-        addToast({ title: "Data loaded successfully", type: "success" });
+        const data = await response.json();
+        setProducts(data);
+
+        if (retryCount > 0) {
+          addToast({ title: "Data loaded successfully", type: "success" });
+        }
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error ? err.message : "Failed to fetch content";
+        setError(errorMessage);
+        addToast({ title: `Error: ${errorMessage}`, type: "error" });
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      const errorMessage =
-        err instanceof Error ? err.message : "Failed to fetch content";
-      setError(errorMessage);
-      addToast({ title: `Error: ${errorMessage}`, type: "error" });
-    } finally {
-      setLoading(false);
-    }
-  }, [addToast]);
+    },
+    [addToast]
+  );
 
   const clearFilters = useCallback(() => {
     setSearchFilters({
@@ -380,7 +385,7 @@ export default function ContentWorksheetPage() {
             </h2>
             <p className="text-red-400 mb-4">{error}</p>
             <button
-              onClick={fetchProducts}
+              onClick={() => fetchProducts()}
               className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
             >
               Retry

@@ -11,7 +11,7 @@ export async function GET() {
     };
 
     const missingVars = Object.entries(requiredEnvVars)
-      .filter(([key, value]) => key !== 'NODE_ENV' && !value)
+      .filter(([key, value]) => key !== "NODE_ENV" && !value)
       .map(([key]) => key);
 
     const status = {
@@ -20,13 +20,18 @@ export async function GET() {
       environment: process.env.NODE_ENV,
       environmentVariables: {
         ...requiredEnvVars,
-        GOOGLE_PRIVATE_KEY: !!process.env.GOOGLE_PRIVATE_KEY ? "✓ Present" : "✗ Missing",
+        GOOGLE_PRIVATE_KEY: !!process.env.GOOGLE_PRIVATE_KEY
+          ? "✓ Present"
+          : "✗ Missing",
       },
-      issues: missingVars.length > 0 ? [`Missing environment variables: ${missingVars.join(', ')}`] : [],
+      issues:
+        missingVars.length > 0
+          ? [`Missing environment variables: ${missingVars.join(", ")}`]
+          : [],
     };
 
-    return NextResponse.json(status, { 
-      status: missingVars.length > 0 ? 500 : 200 
+    return NextResponse.json(status, {
+      status: missingVars.length > 0 ? 500 : 200,
     });
   } catch (error) {
     return NextResponse.json(
