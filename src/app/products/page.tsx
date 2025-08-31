@@ -432,7 +432,7 @@ export default function ContentWorksheetPage() {
               </div>
 
               <button
-                onClick={fetchProducts}
+                onClick={() => fetchProducts()}
                 disabled={loading}
                 className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
               >
