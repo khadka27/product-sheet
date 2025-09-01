@@ -58,58 +58,24 @@ async function getSheetsClient() {
       throw new Error("GOOGLE_SHEET_ID environment variable is missing");
     }
 
-    // Handle the private key formatting - support both escaped and unescaped newlines
+    // Handle the private key formatting - simpler approach
     let formattedPrivateKey = privateKey;
 
-    // Log the first and last 50 characters for debugging (without exposing the full key)
-    console.log("Private key debug info:", {
-      length: privateKey.length,
-      start: privateKey.substring(0, 50),
-      end: privateKey.substring(privateKey.length - 50),
-      hasEscapedNewlines: privateKey.includes("\\n"),
-      hasActualNewlines: privateKey.includes("\n"),
-    });
-
     try {
-      // If the key contains literal \n strings, replace them with actual newlines
-      if (privateKey.includes("\\n")) {
-        formattedPrivateKey = privateKey.replace(/\\n/g, "\n");
-      }
-
-      // Remove any extra whitespace and normalize line endings
-      formattedPrivateKey = formattedPrivateKey.trim().replace(/\r\n/g, "\n");
-
-      // Ensure the key starts and ends with the proper PEM format
-      if (!formattedPrivateKey.includes("-----BEGIN PRIVATE KEY-----")) {
-        throw new Error(
-          "Invalid private key format: missing BEGIN PRIVATE KEY header"
-        );
-      }
-
-      if (!formattedPrivateKey.includes("-----END PRIVATE KEY-----")) {
-        throw new Error(
-          "Invalid private key format: missing END PRIVATE KEY footer"
-        );
-      }
-
-      // Ensure proper line breaks around headers and footers
+      // Replace escaped newlines with actual newlines
+      // Handle both single and double escaped newlines
       formattedPrivateKey = formattedPrivateKey
-        .replace(
-          /-----BEGIN PRIVATE KEY-----\s*/,
-          "-----BEGIN PRIVATE KEY-----\n"
-        )
-        .replace(/\s*-----END PRIVATE KEY-----/, "\n-----END PRIVATE KEY-----");
+        .replace(/\\\\n/g, "\n") // Handle double escaped newlines first
+        .replace(/\\n/g, "\n") // Then handle single escaped newlines
+        .trim();
 
-      // Validate that the key content between headers is base64
-      const keyContent = formattedPrivateKey
-        .replace("-----BEGIN PRIVATE KEY-----", "")
-        .replace("-----END PRIVATE KEY-----", "")
-        .replace(/\s/g, "");
+      // Ensure proper PEM format
+      if (!formattedPrivateKey.startsWith("-----BEGIN PRIVATE KEY-----")) {
+        throw new Error("Invalid private key format: missing BEGIN header");
+      }
 
-      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(keyContent)) {
-        throw new Error(
-          "Invalid private key format: key content is not valid base64"
-        );
+      if (!formattedPrivateKey.endsWith("-----END PRIVATE KEY-----")) {
+        throw new Error("Invalid private key format: missing END footer");
       }
     } catch (keyError) {
       console.error("Private key formatting error:", keyError);
