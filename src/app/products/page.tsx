@@ -192,7 +192,7 @@ export default function ContentWorksheetPage() {
       try {
         setLoading(true);
         setError(null);
-        
+
         const response = await axios.get("/api/products", {
           timeout: 30000, // 30 second timeout
           validateStatus: (status) => status < 500, // Don't throw for 4xx errors
@@ -231,13 +231,14 @@ export default function ContentWorksheetPage() {
         }
       } catch (err) {
         let errorMessage = "Failed to fetch content";
-        
+
         if (axios.isAxiosError(err)) {
-          if (err.code === 'ECONNABORTED') {
+          if (err.code === "ECONNABORTED") {
             errorMessage = "Request timeout. Please try again.";
           } else if (err.response) {
             // Server responded with error status
-            errorMessage = err.response.data?.error || `HTTP ${err.response.status}`;
+            errorMessage =
+              err.response.data?.error || `HTTP ${err.response.status}`;
           } else if (err.request) {
             // Request was made but no response received
             errorMessage = "Network error. Please check your connection.";
@@ -247,7 +248,7 @@ export default function ContentWorksheetPage() {
         } else if (err instanceof Error) {
           errorMessage = err.message;
         }
-        
+
         setError(errorMessage);
         addToast({ title: `Error: ${errorMessage}`, type: "error" });
       } finally {

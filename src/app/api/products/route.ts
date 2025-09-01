@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
-import { rateLimiter, sheetsApiLimiter } from '@/lib/rateLimiter';
+import { rateLimiter, sheetsApiLimiter } from "@/lib/rateLimiter";
 
 // Rate limiter rejection response interface
 interface RateLimiterRejectResponse {
@@ -94,7 +94,10 @@ async function getSheetsClient() {
 
       // Ensure proper line breaks around headers and footers
       formattedPrivateKey = formattedPrivateKey
-        .replace(/-----BEGIN PRIVATE KEY-----\s*/, "-----BEGIN PRIVATE KEY-----\n")
+        .replace(
+          /-----BEGIN PRIVATE KEY-----\s*/,
+          "-----BEGIN PRIVATE KEY-----\n"
+        )
         .replace(/\s*-----END PRIVATE KEY-----/, "\n-----END PRIVATE KEY-----");
 
       // Validate that the key content between headers is base64
@@ -104,12 +107,15 @@ async function getSheetsClient() {
         .replace(/\s/g, "");
 
       if (!/^[A-Za-z0-9+/]*={0,2}$/.test(keyContent)) {
-        throw new Error("Invalid private key format: key content is not valid base64");
+        throw new Error(
+          "Invalid private key format: key content is not valid base64"
+        );
       }
-
     } catch (keyError) {
       console.error("Private key formatting error:", keyError);
-      throw new Error(`Private key processing failed: ${keyError instanceof Error ? keyError.message : 'Unknown error'}`);
+      throw new Error(
+        `Private key processing failed: ${keyError instanceof Error ? keyError.message : "Unknown error"}`
+      );
     }
 
     const auth = new google.auth.GoogleAuth({
@@ -256,26 +262,30 @@ function isCacheValid(): boolean {
 export async function GET(request: Request) {
   try {
     // Get client IP for rate limiting
-    const clientIp = request.headers.get('x-forwarded-for') || 
-                     request.headers.get('x-real-ip') || 
-                     'unknown-ip';
+    const clientIp =
+      request.headers.get("x-forwarded-for") ||
+      request.headers.get("x-real-ip") ||
+      "unknown-ip";
 
     // Apply rate limiting
     try {
       await rateLimiter.consume(clientIp);
     } catch (rejRes: unknown) {
       const rejection = rejRes as RateLimiterRejectResponse;
-      const retryAfter = rejection?.msBeforeNext ? Math.round(rejection.msBeforeNext / 1000) : 60;
+      const retryAfter = rejection?.msBeforeNext
+        ? Math.round(rejection.msBeforeNext / 1000)
+        : 60;
       return NextResponse.json(
         {
-          error: "Rate limit exceeded. Please wait before making another request.",
-          retryAfter
+          error:
+            "Rate limit exceeded. Please wait before making another request.",
+          retryAfter,
         },
-        { 
+        {
           status: 429,
           headers: {
-            'Retry-After': String(retryAfter)
-          }
+            "Retry-After": String(retryAfter),
+          },
         }
       );
     }
@@ -287,23 +297,26 @@ export async function GET(request: Request) {
     }
 
     console.log("Fetching fresh data from Google Sheets");
-    
+
     // Apply stricter rate limiting for actual Google Sheets API calls
     try {
       await sheetsApiLimiter.consume(clientIp);
     } catch (rejRes: unknown) {
       const rejection = rejRes as RateLimiterRejectResponse;
-      const retryAfter = rejection?.msBeforeNext ? Math.round(rejection.msBeforeNext / 1000) : 120;
+      const retryAfter = rejection?.msBeforeNext
+        ? Math.round(rejection.msBeforeNext / 1000)
+        : 120;
       return NextResponse.json(
         {
-          error: "Google Sheets API rate limit exceeded. Please wait longer before making another request.",
-          retryAfter
+          error:
+            "Google Sheets API rate limit exceeded. Please wait longer before making another request.",
+          retryAfter,
         },
-        { 
+        {
           status: 429,
           headers: {
-            'Retry-After': String(retryAfter)
-          }
+            "Retry-After": String(retryAfter),
+          },
         }
       );
     }
@@ -414,9 +427,10 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     // Get client IP for rate limiting
-    const clientIp = request.headers.get('x-forwarded-for') || 
-                     request.headers.get('x-real-ip') || 
-                     'unknown-ip';
+    const clientIp =
+      request.headers.get("x-forwarded-for") ||
+      request.headers.get("x-real-ip") ||
+      "unknown-ip";
 
     // Apply rate limiting
     try {
@@ -424,17 +438,20 @@ export async function POST(request: Request) {
       await sheetsApiLimiter.consume(clientIp);
     } catch (rejRes: unknown) {
       const rejection = rejRes as RateLimiterRejectResponse;
-      const retryAfter = rejection?.msBeforeNext ? Math.round(rejection.msBeforeNext / 1000) : 60;
+      const retryAfter = rejection?.msBeforeNext
+        ? Math.round(rejection.msBeforeNext / 1000)
+        : 60;
       return NextResponse.json(
         {
-          error: "Rate limit exceeded. Please wait before making another request.",
-          retryAfter
+          error:
+            "Rate limit exceeded. Please wait before making another request.",
+          retryAfter,
         },
-        { 
+        {
           status: 429,
           headers: {
-            'Retry-After': String(retryAfter)
-          }
+            "Retry-After": String(retryAfter),
+          },
         }
       );
     }
@@ -496,9 +513,10 @@ export async function POST(request: Request) {
 export async function PUT(request: Request) {
   try {
     // Get client IP for rate limiting
-    const clientIp = request.headers.get('x-forwarded-for') || 
-                     request.headers.get('x-real-ip') || 
-                     'unknown-ip';
+    const clientIp =
+      request.headers.get("x-forwarded-for") ||
+      request.headers.get("x-real-ip") ||
+      "unknown-ip";
 
     // Apply rate limiting
     try {
@@ -506,17 +524,20 @@ export async function PUT(request: Request) {
       await sheetsApiLimiter.consume(clientIp);
     } catch (rejRes: unknown) {
       const rejection = rejRes as RateLimiterRejectResponse;
-      const retryAfter = rejection?.msBeforeNext ? Math.round(rejection.msBeforeNext / 1000) : 60;
+      const retryAfter = rejection?.msBeforeNext
+        ? Math.round(rejection.msBeforeNext / 1000)
+        : 60;
       return NextResponse.json(
         {
-          error: "Rate limit exceeded. Please wait before making another request.",
-          retryAfter
+          error:
+            "Rate limit exceeded. Please wait before making another request.",
+          retryAfter,
         },
-        { 
+        {
           status: 429,
           headers: {
-            'Retry-After': String(retryAfter)
-          }
+            "Retry-After": String(retryAfter),
+          },
         }
       );
     }
