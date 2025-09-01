@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useToast } from "@/components/ui/Toast";
+import axios, { AxiosError } from "axios";
 
 interface Product {
   id: string;
@@ -191,7 +192,11 @@ export default function ContentWorksheetPage() {
       try {
         setLoading(true);
         setError(null);
-        const response = await fetch("/api/products");
+        
+        const response = await axios.get("/api/products", {
+          timeout: 30000, // 30 second timeout
+          validateStatus: (status) => status < 500, // Don't throw for 4xx errors
+        });
 
         if (response.status === 429) {
           // Handle rate limiting with exponential backoff
@@ -214,20 +219,35 @@ export default function ContentWorksheetPage() {
           }
         }
 
-        if (!response.ok) {
-          const errorData = await response.json();
+        if (response.status >= 400) {
+          const errorData = response.data;
           throw new Error(errorData.error || `HTTP ${response.status}`);
         }
 
-        const data = await response.json();
-        setProducts(data);
+        setProducts(response.data);
 
         if (retryCount > 0) {
           addToast({ title: "Data loaded successfully", type: "success" });
         }
       } catch (err) {
-        const errorMessage =
-          err instanceof Error ? err.message : "Failed to fetch content";
+        let errorMessage = "Failed to fetch content";
+        
+        if (axios.isAxiosError(err)) {
+          if (err.code === 'ECONNABORTED') {
+            errorMessage = "Request timeout. Please try again.";
+          } else if (err.response) {
+            // Server responded with error status
+            errorMessage = err.response.data?.error || `HTTP ${err.response.status}`;
+          } else if (err.request) {
+            // Request was made but no response received
+            errorMessage = "Network error. Please check your connection.";
+          } else {
+            errorMessage = err.message;
+          }
+        } else if (err instanceof Error) {
+          errorMessage = err.message;
+        }
+        
         setError(errorMessage);
         addToast({ title: `Error: ${errorMessage}`, type: "error" });
       } finally {

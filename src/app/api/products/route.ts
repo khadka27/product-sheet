@@ -1,5 +1,13 @@
 import { NextResponse } from "next/server";
 import { google } from "googleapis";
+import { rateLimiter, sheetsApiLimiter } from '@/lib/rateLimiter';
+
+// Rate limiter rejection response interface
+interface RateLimiterRejectResponse {
+  msBeforeNext?: number;
+  remainingPoints?: number;
+  totalHits?: number;
+}
 
 // Google Sheets configuration
 // Use environment variable for spreadsheet ID
@@ -30,11 +38,6 @@ const cache = {
   ttl: process.env.NODE_ENV === "production" ? 60000 : 30000, // 1 minute in production, 30 seconds in development
 };
 
-// Rate limiting with different intervals for development vs production
-let lastRequestTime = 0;
-const MIN_REQUEST_INTERVAL =
-  process.env.NODE_ENV === "production" ? 5000 : 2000; // 5 seconds in production, 2 seconds in development
-
 // Initialize Google Sheets client
 async function getSheetsClient() {
   try {
@@ -55,8 +58,59 @@ async function getSheetsClient() {
       throw new Error("GOOGLE_SHEET_ID environment variable is missing");
     }
 
-    // Handle the private key formatting
-    const formattedPrivateKey = privateKey.replace(/\\n/g, "\n");
+    // Handle the private key formatting - support both escaped and unescaped newlines
+    let formattedPrivateKey = privateKey;
+
+    // Log the first and last 50 characters for debugging (without exposing the full key)
+    console.log("Private key debug info:", {
+      length: privateKey.length,
+      start: privateKey.substring(0, 50),
+      end: privateKey.substring(privateKey.length - 50),
+      hasEscapedNewlines: privateKey.includes("\\n"),
+      hasActualNewlines: privateKey.includes("\n"),
+    });
+
+    try {
+      // If the key contains literal \n strings, replace them with actual newlines
+      if (privateKey.includes("\\n")) {
+        formattedPrivateKey = privateKey.replace(/\\n/g, "\n");
+      }
+
+      // Remove any extra whitespace and normalize line endings
+      formattedPrivateKey = formattedPrivateKey.trim().replace(/\r\n/g, "\n");
+
+      // Ensure the key starts and ends with the proper PEM format
+      if (!formattedPrivateKey.includes("-----BEGIN PRIVATE KEY-----")) {
+        throw new Error(
+          "Invalid private key format: missing BEGIN PRIVATE KEY header"
+        );
+      }
+
+      if (!formattedPrivateKey.includes("-----END PRIVATE KEY-----")) {
+        throw new Error(
+          "Invalid private key format: missing END PRIVATE KEY footer"
+        );
+      }
+
+      // Ensure proper line breaks around headers and footers
+      formattedPrivateKey = formattedPrivateKey
+        .replace(/-----BEGIN PRIVATE KEY-----\s*/, "-----BEGIN PRIVATE KEY-----\n")
+        .replace(/\s*-----END PRIVATE KEY-----/, "\n-----END PRIVATE KEY-----");
+
+      // Validate that the key content between headers is base64
+      const keyContent = formattedPrivateKey
+        .replace("-----BEGIN PRIVATE KEY-----", "")
+        .replace("-----END PRIVATE KEY-----", "")
+        .replace(/\s/g, "");
+
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(keyContent)) {
+        throw new Error("Invalid private key format: key content is not valid base64");
+      }
+
+    } catch (keyError) {
+      console.error("Private key formatting error:", keyError);
+      throw new Error(`Private key processing failed: ${keyError instanceof Error ? keyError.message : 'Unknown error'}`);
+    }
 
     const auth = new google.auth.GoogleAuth({
       credentials: {
@@ -65,6 +119,16 @@ async function getSheetsClient() {
       },
       scopes: ["https://www.googleapis.com/auth/spreadsheets"],
     });
+
+    // Test the auth to catch any issues early
+    try {
+      await auth.getAccessToken();
+    } catch (authError) {
+      console.error("Google Auth initialization failed:", authError);
+      throw new Error(
+        `Google authentication failed: ${authError instanceof Error ? authError.message : "Unknown error"}`
+      );
+    }
 
     const sheets = google.sheets({ version: "v4", auth });
     return sheets;
@@ -183,32 +247,36 @@ function productToRow(product: Product): string[] {
   ];
 }
 
-// Rate limiting middleware
-function checkRateLimit(): boolean {
-  const now = Date.now();
-  if (now - lastRequestTime < MIN_REQUEST_INTERVAL) {
-    return false;
-  }
-  lastRequestTime = now;
-  return true;
-}
-
 // Check cache validity
 function isCacheValid(): boolean {
   return cache.data !== null && Date.now() - cache.lastFetch < cache.ttl;
 }
 
 // GET - Fetch all products with caching and rate limiting
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    // Check rate limit
-    if (!checkRateLimit()) {
+    // Get client IP for rate limiting
+    const clientIp = request.headers.get('x-forwarded-for') || 
+                     request.headers.get('x-real-ip') || 
+                     'unknown-ip';
+
+    // Apply rate limiting
+    try {
+      await rateLimiter.consume(clientIp);
+    } catch (rejRes: unknown) {
+      const rejection = rejRes as RateLimiterRejectResponse;
+      const retryAfter = rejection?.msBeforeNext ? Math.round(rejection.msBeforeNext / 1000) : 60;
       return NextResponse.json(
         {
-          error:
-            "Rate limit exceeded. Please wait before making another request.",
+          error: "Rate limit exceeded. Please wait before making another request.",
+          retryAfter
         },
-        { status: 429 }
+        { 
+          status: 429,
+          headers: {
+            'Retry-After': String(retryAfter)
+          }
+        }
       );
     }
 
@@ -219,6 +287,27 @@ export async function GET() {
     }
 
     console.log("Fetching fresh data from Google Sheets");
+    
+    // Apply stricter rate limiting for actual Google Sheets API calls
+    try {
+      await sheetsApiLimiter.consume(clientIp);
+    } catch (rejRes: unknown) {
+      const rejection = rejRes as RateLimiterRejectResponse;
+      const retryAfter = rejection?.msBeforeNext ? Math.round(rejection.msBeforeNext / 1000) : 120;
+      return NextResponse.json(
+        {
+          error: "Google Sheets API rate limit exceeded. Please wait longer before making another request.",
+          retryAfter
+        },
+        { 
+          status: 429,
+          headers: {
+            'Retry-After': String(retryAfter)
+          }
+        }
+      );
+    }
+
     const sheets = await getSheetsClient();
 
     // Get dynamic range
@@ -324,14 +413,29 @@ export async function GET() {
 // POST - Add new product
 export async function POST(request: Request) {
   try {
-    // Check rate limit
-    if (!checkRateLimit()) {
+    // Get client IP for rate limiting
+    const clientIp = request.headers.get('x-forwarded-for') || 
+                     request.headers.get('x-real-ip') || 
+                     'unknown-ip';
+
+    // Apply rate limiting
+    try {
+      await rateLimiter.consume(clientIp);
+      await sheetsApiLimiter.consume(clientIp);
+    } catch (rejRes: unknown) {
+      const rejection = rejRes as RateLimiterRejectResponse;
+      const retryAfter = rejection?.msBeforeNext ? Math.round(rejection.msBeforeNext / 1000) : 60;
       return NextResponse.json(
         {
-          error:
-            "Rate limit exceeded. Please wait before making another request.",
+          error: "Rate limit exceeded. Please wait before making another request.",
+          retryAfter
         },
-        { status: 429 }
+        { 
+          status: 429,
+          headers: {
+            'Retry-After': String(retryAfter)
+          }
+        }
       );
     }
 
@@ -391,14 +495,29 @@ export async function POST(request: Request) {
 // PUT - Update existing product
 export async function PUT(request: Request) {
   try {
-    // Check rate limit
-    if (!checkRateLimit()) {
+    // Get client IP for rate limiting
+    const clientIp = request.headers.get('x-forwarded-for') || 
+                     request.headers.get('x-real-ip') || 
+                     'unknown-ip';
+
+    // Apply rate limiting
+    try {
+      await rateLimiter.consume(clientIp);
+      await sheetsApiLimiter.consume(clientIp);
+    } catch (rejRes: unknown) {
+      const rejection = rejRes as RateLimiterRejectResponse;
+      const retryAfter = rejection?.msBeforeNext ? Math.round(rejection.msBeforeNext / 1000) : 60;
       return NextResponse.json(
         {
-          error:
-            "Rate limit exceeded. Please wait before making another request.",
+          error: "Rate limit exceeded. Please wait before making another request.",
+          retryAfter
         },
-        { status: 429 }
+        { 
+          status: 429,
+          headers: {
+            'Retry-After': String(retryAfter)
+          }
+        }
       );
     }
 
